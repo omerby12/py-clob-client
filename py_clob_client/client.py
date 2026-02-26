@@ -514,11 +514,10 @@ class ClobClient:
                 + str(1 - float(tick_size))
             )
 
-        neg_risk = (
-            options.neg_risk
-            if options and options.neg_risk
-            else self.get_neg_risk(order_args.token_id)
-        )
+        if options and options.neg_risk is not None:
+            neg_risk = options.neg_risk
+        else:
+            neg_risk = self.get_neg_risk(order_args.token_id)
 
         # fee rate
         fee_rate_bps = self.__resolve_fee_rate(

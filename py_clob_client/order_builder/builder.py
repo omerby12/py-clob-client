@@ -30,9 +30,9 @@ from ..clob_types import (
 
 ROUNDING_CONFIG: dict[TickSize, RoundConfig] = {
     "0.1": RoundConfig(price=1, size=2, amount=3),
-    "0.01": RoundConfig(price=2, size=2, amount=4),
-    "0.001": RoundConfig(price=3, size=2, amount=5),
-    "0.0001": RoundConfig(price=4, size=2, amount=6),
+    "0.01": RoundConfig(price=2, size=2, amount=2),
+    "0.001": RoundConfig(price=3, size=2, amount=3),
+    "0.0001": RoundConfig(price=4, size=2, amount=4),
 }
 
 
@@ -55,7 +55,6 @@ class OrderBuilder:
 
         if side == BUY:
             raw_taker_amt = round_down(size, round_config.size)
-
             raw_maker_amt = raw_taker_amt * raw_price
             if decimal_places(raw_maker_amt) > round_config.amount:
                 raw_maker_amt = round_up(raw_maker_amt, round_config.amount + 4)

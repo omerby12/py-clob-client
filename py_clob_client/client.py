@@ -525,11 +525,14 @@ class ClobClient:
         )
         order_args.fee_rate_bps = fee_rate_bps
 
+        order_type = options.order_type if options else None
+
         return self.builder.create_order(
             order_args,
             CreateOrderOptions(
                 tick_size=tick_size,
                 neg_risk=neg_risk,
+                order_type=order_type,
             ),
         )
 
@@ -585,7 +588,8 @@ class ClobClient:
             CreateOrderOptions(
                 tick_size=tick_size,
                 neg_risk=neg_risk,
-            ),
+                order_type=options.order_type if options else None,
+            )
         )
 
     def post_orders(self, args: list[PostOrdersArgs]):

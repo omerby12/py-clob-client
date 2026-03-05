@@ -7,9 +7,10 @@ from py_order_utils.model import (
 )
 
 from .constants import ZERO_ADDRESS
+from enum import Enum
 
 
-class OrderType(enumerate):
+class OrderType(str,Enum):
     GTC = "GTC"
     FOK = "FOK"
     GTD = "GTD"
@@ -184,7 +185,7 @@ class OrderBookSummary:
         return dumps(self.__dict__, separators=(",", ":"))
 
 
-class AssetType(enumerate):
+class AssetType(str,Enum):
     COLLATERAL = "COLLATERAL"
     CONDITIONAL = "CONDITIONAL"
 
@@ -213,12 +214,15 @@ TickSize = Literal["0.1", "0.01", "0.001", "0.0001"]
 class CreateOrderOptions:
     tick_size: TickSize
     neg_risk: bool
+    order_type: Optional[OrderType] = None
 
 
 @dataclass
 class PartialCreateOrderOptions:
     tick_size: Optional[TickSize] = None
     neg_risk: Optional[bool] = None
+    order_type: Optional[OrderType] = None
+
 
 
 @dataclass

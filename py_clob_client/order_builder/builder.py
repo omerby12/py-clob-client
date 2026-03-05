@@ -15,9 +15,11 @@ from .helpers import (
     decimal_places,
     round_up,
 )
+
 from .constants import BUY, SELL
 from ..config import get_contract_config
 from ..signer import Signer
+
 from ..clob_types import (
     OrderArgs,
     CreateOrderOptions,
@@ -28,36 +30,62 @@ from ..clob_types import (
     OrderType,
 )
 
+# ==========================================================
+# ROUNDING CONFIG
+# ==========================================================
+
 ROUNDING_CONFIG: dict[TickSize, RoundConfig] = {
     "0.1": RoundConfig(price=1, size=2, amount=3),
-    "0.01": RoundConfig(price=2, size=2, amount=2),
-    "0.001": RoundConfig(price=3, size=2, amount=3),
-    "0.0001": RoundConfig(price=4, size=2, amount=4),
+    "0.01": RoundConfig(price=2, size=2, amount=4),
+    "0.001": RoundConfig(price=3, size=2, amount=5),
+    "0.0001": RoundConfig(price=4, size=2, amount=6),
 }
 
+TAKER_AMOUNT_PRECISION = 2
+
+
+# ==========================================================
+# ORDER BUILDER
+# ==========================================================
 
 class OrderBuilder:
+
     def __init__(self, signer: Signer, sig_type=None, funder=None):
+
         self.signer = signer
-
-        # Signature type used sign orders, defaults to EOA type
         self.sig_type = sig_type if sig_type is not None else EOA
-
-        # Address which holds funds to be used.
-        # Used for Polymarket proxy wallets and other smart contract wallets
-        # Defaults to the address of the signer
         self.funder = funder if funder is not None else self.signer.address()
+
+        # ---- Cache expensive objects (major latency improvement) ----
+        self.chain_id = self.signer.get_chain_id()
+        self.contract_config = get_contract_config(self.chain_id, False)
+
+        self.utils_signer = UtilsSigner(key=self.signer.private_key)
+
+        self.utils_builder = UtilsOrderBuilder(
+            self.contract_config.exchange,
+            self.chain_id,
+            self.utils_signer,
+        )
+
+    # ==========================================================
+    # LIMIT ORDER AMOUNTS
+    # ==========================================================
 
     def get_order_amounts(
         self, side: str, size: float, price: float, round_config: RoundConfig
     ):
+
         raw_price = round_normal(price, round_config.price)
 
         if side == BUY:
+
             raw_taker_amt = round_down(size, round_config.size)
             raw_maker_amt = raw_taker_amt * raw_price
+
             if decimal_places(raw_maker_amt) > round_config.amount:
                 raw_maker_amt = round_up(raw_maker_amt, round_config.amount + 4)
+
                 if decimal_places(raw_maker_amt) > round_config.amount:
                     raw_maker_amt = round_down(raw_maker_amt, round_config.amount)
 
@@ -65,12 +93,15 @@ class OrderBuilder:
             taker_amount = to_token_decimals(raw_taker_amt)
 
             return UtilsBuy, maker_amount, taker_amount
-        elif side == SELL:
-            raw_maker_amt = round_down(size, round_config.size)
 
+        elif side == SELL:
+
+            raw_maker_amt = round_down(size, round_config.size)
             raw_taker_amt = raw_maker_amt * raw_price
+
             if decimal_places(raw_taker_amt) > round_config.amount:
                 raw_taker_amt = round_up(raw_taker_amt, round_config.amount + 4)
+
                 if decimal_places(raw_taker_amt) > round_config.amount:
                     raw_taker_amt = round_down(raw_taker_amt, round_config.amount)
 
@@ -78,19 +109,28 @@ class OrderBuilder:
             taker_amount = to_token_decimals(raw_taker_amt)
 
             return UtilsSell, maker_amount, taker_amount
+
         else:
             raise ValueError(f"order_args.side must be '{BUY}' or '{SELL}'")
+
+    # ==========================================================
+    # MARKET ORDER AMOUNTS
+    # ==========================================================
 
     def get_market_order_amounts(
         self, side: str, amount: float, price: float, round_config: RoundConfig
     ):
+
         raw_price = round_normal(price, round_config.price)
 
         if side == BUY:
+
             raw_maker_amt = round_down(amount, round_config.size)
             raw_taker_amt = raw_maker_amt / raw_price
+
             if decimal_places(raw_taker_amt) > round_config.amount:
                 raw_taker_amt = round_up(raw_taker_amt, round_config.amount + 4)
+
                 if decimal_places(raw_taker_amt) > round_config.amount:
                     raw_taker_amt = round_down(raw_taker_amt, round_config.amount)
 
@@ -100,11 +140,13 @@ class OrderBuilder:
             return UtilsBuy, maker_amount, taker_amount
 
         elif side == SELL:
-            raw_maker_amt = round_down(amount, round_config.size)
 
+            raw_maker_amt = round_down(amount, round_config.size)
             raw_taker_amt = raw_maker_amt * raw_price
+
             if decimal_places(raw_taker_amt) > round_config.amount:
                 raw_taker_amt = round_up(raw_taker_amt, round_config.amount + 4)
+
                 if decimal_places(raw_taker_amt) > round_config.amount:
                     raw_taker_amt = round_down(raw_taker_amt, round_config.amount)
 
@@ -112,28 +154,32 @@ class OrderBuilder:
             taker_amount = to_token_decimals(raw_taker_amt)
 
             return UtilsSell, maker_amount, taker_amount
+
         else:
             raise ValueError(f"order_args.side must be '{BUY}' or '{SELL}'")
+
+    # ==========================================================
+    # CREATE LIMIT ORDER
+    # ==========================================================
 
     def create_order(
         self, order_args: OrderArgs, options: CreateOrderOptions
     ) -> SignedOrder:
-        """
-        Creates and signs an order
-        """
+
         round_config = ROUNDING_CONFIG[options.tick_size]
 
-        # detect taker order from order type
-        is_taker = options.order_type in (
+        order_type = getattr(options, "order_type", None)
+
+        is_taker = order_type in (
             OrderType.FAK,
-            OrderType.FOK
+            OrderType.FOK,
         )
 
         if is_taker:
             round_config = RoundConfig(
                 price=round_config.price,
                 size=round_config.size,
-                amount=2
+                amount=TAKER_AMOUNT_PRECISION,
             )
 
         side, maker_amount, taker_amount = self.get_order_amounts(
@@ -157,31 +203,24 @@ class OrderBuilder:
             signatureType=self.sig_type,
         )
 
-        contract_config = get_contract_config(
-            self.signer.get_chain_id(), options.neg_risk
-        )
+        return self.utils_builder.build_signed_order(data)
 
-        order_builder = UtilsOrderBuilder(
-            contract_config.exchange,
-            self.signer.get_chain_id(),
-            UtilsSigner(key=self.signer.private_key),
-        )
-
-        return order_builder.build_signed_order(data)
+    # ==========================================================
+    # CREATE MARKET ORDER
+    # ==========================================================
 
     def create_market_order(
         self, order_args: MarketOrderArgs, options: CreateOrderOptions
     ) -> SignedOrder:
-        """
-        Creates and signs a market order
-        """
-        
+
+        base = ROUNDING_CONFIG[options.tick_size]
+
         round_config = RoundConfig(
-            price=ROUNDING_CONFIG[options.tick_size].price,
-            size=ROUNDING_CONFIG[options.tick_size].size,
-            amount=2
+            price=base.price,
+            size=base.size,
+            amount=TAKER_AMOUNT_PRECISION,
         )
-        
+
         side, maker_amount, taker_amount = self.get_market_order_amounts(
             order_args.side,
             order_args.amount,
@@ -203,17 +242,11 @@ class OrderBuilder:
             signatureType=self.sig_type,
         )
 
-        contract_config = get_contract_config(
-            self.signer.get_chain_id(), options.neg_risk
-        )
+        return self.utils_builder.build_signed_order(data)
 
-        order_builder = UtilsOrderBuilder(
-            contract_config.exchange,
-            self.signer.get_chain_id(),
-            UtilsSigner(key=self.signer.private_key),
-        )
-
-        return order_builder.build_signed_order(data)
+    # ==========================================================
+    # MARKET PRICE HELPERS
+    # ==========================================================
 
     def calculate_buy_market_price(
         self,
@@ -221,13 +254,16 @@ class OrderBuilder:
         amount_to_match: float,
         order_type: OrderType,
     ) -> float:
+
         if not positions:
             raise Exception("no match")
 
-        sum = 0
+        total = 0
+
         for p in reversed(positions):
-            sum += float(p.size) * float(p.price)
-            if sum >= amount_to_match:
+            total += float(p.size) * float(p.price)
+
+            if total >= amount_to_match:
                 return float(p.price)
 
         if order_type == OrderType.FOK:
@@ -241,13 +277,16 @@ class OrderBuilder:
         amount_to_match: float,
         order_type: OrderType,
     ) -> float:
+
         if not positions:
             raise Exception("no match")
 
-        sum = 0
+        total = 0
+
         for p in reversed(positions):
-            sum += float(p.size)
-            if sum >= amount_to_match:
+            total += float(p.size)
+
+            if total >= amount_to_match:
                 return float(p.price)
 
         if order_type == OrderType.FOK:

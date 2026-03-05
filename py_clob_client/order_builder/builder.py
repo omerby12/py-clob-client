@@ -121,11 +121,26 @@ class OrderBuilder:
         """
         Creates and signs an order
         """
+        round_config = ROUNDING_CONFIG[options.tick_size]
+
+        # detect taker order from order type
+        is_taker = options.order_type in (
+            OrderType.FAK,
+            OrderType.FOK
+        )
+
+        if is_taker:
+            round_config = RoundConfig(
+                price=round_config.price,
+                size=round_config.size,
+                amount=2
+            )
+
         side, maker_amount, taker_amount = self.get_order_amounts(
             order_args.side,
             order_args.size,
             order_args.price,
-            ROUNDING_CONFIG[options.tick_size],
+            round_config,
         )
 
         data = OrderData(
@@ -160,11 +175,18 @@ class OrderBuilder:
         """
         Creates and signs a market order
         """
+        
+        round_config = RoundConfig(
+            price=ROUNDING_CONFIG[options.tick_size].price,
+            size=ROUNDING_CONFIG[options.tick_size].size,
+            amount=2
+        )
+        
         side, maker_amount, taker_amount = self.get_market_order_amounts(
             order_args.side,
             order_args.amount,
             order_args.price,
-            ROUNDING_CONFIG[options.tick_size],
+            round_config,
         )
 
         data = OrderData(

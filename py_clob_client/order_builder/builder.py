@@ -12,8 +12,6 @@ from .helpers import (
     to_token_decimals,
     round_down,
     round_normal,
-    decimal_places,
-    round_up,
 )
 
 from .constants import BUY, SELL
@@ -41,7 +39,13 @@ ROUNDING_CONFIG: dict[TickSize, RoundConfig] = {
     "0.0001": RoundConfig(price=4, size=2, amount=6),
 }
 
-TAKER_AMOUNT_PRECISION = 2
+
+# ==========================================================
+# PRECISION HELPER
+# ==========================================================
+
+def _clamp_precision(value: float, precision: int) -> float:
+    return round_down(value, precision)
 
 
 # ==========================================================
@@ -56,7 +60,6 @@ class OrderBuilder:
         self.sig_type = sig_type if sig_type is not None else EOA
         self.funder = funder if funder is not None else self.signer.address()
 
-        # ---- Cache expensive objects (major latency improvement) ----
         self.chain_id = self.signer.get_chain_id()
         self.contract_config = get_contract_config(self.chain_id, False)
 
@@ -73,7 +76,13 @@ class OrderBuilder:
     # ==========================================================
 
     def get_order_amounts(
-        self, side: str, size: float, price: float, round_config: RoundConfig
+        self,
+        side: str,
+        size: float,
+        price: float,
+        round_config: RoundConfig,
+        maker_precision: int,
+        taker_precision: int,
     ):
 
         raw_price = round_normal(price, round_config.price)
@@ -83,80 +92,64 @@ class OrderBuilder:
             raw_taker_amt = round_down(size, round_config.size)
             raw_maker_amt = raw_taker_amt * raw_price
 
-            if decimal_places(raw_maker_amt) > round_config.amount:
-                raw_maker_amt = round_up(raw_maker_amt, round_config.amount + 4)
-
-                if decimal_places(raw_maker_amt) > round_config.amount:
-                    raw_maker_amt = round_down(raw_maker_amt, round_config.amount)
-
-            maker_amount = to_token_decimals(raw_maker_amt)
-            taker_amount = to_token_decimals(raw_taker_amt)
-
-            return UtilsBuy, maker_amount, taker_amount
-
         elif side == SELL:
 
             raw_maker_amt = round_down(size, round_config.size)
             raw_taker_amt = raw_maker_amt * raw_price
 
-            if decimal_places(raw_taker_amt) > round_config.amount:
-                raw_taker_amt = round_up(raw_taker_amt, round_config.amount + 4)
-
-                if decimal_places(raw_taker_amt) > round_config.amount:
-                    raw_taker_amt = round_down(raw_taker_amt, round_config.amount)
-
-            maker_amount = to_token_decimals(raw_maker_amt)
-            taker_amount = to_token_decimals(raw_taker_amt)
-
-            return UtilsSell, maker_amount, taker_amount
-
         else:
             raise ValueError(f"order_args.side must be '{BUY}' or '{SELL}'")
+
+        raw_maker_amt = _clamp_precision(raw_maker_amt, maker_precision)
+        raw_taker_amt = _clamp_precision(raw_taker_amt, taker_precision)
+
+        maker_amount = to_token_decimals(raw_maker_amt)
+        taker_amount = to_token_decimals(raw_taker_amt)
+
+        if side == BUY:
+            return UtilsBuy, maker_amount, taker_amount
+        else:
+            return UtilsSell, maker_amount, taker_amount
 
     # ==========================================================
     # MARKET ORDER AMOUNTS
     # ==========================================================
 
     def get_market_order_amounts(
-        self, side: str, amount: float, price: float, round_config: RoundConfig
+        self,
+        side: str,
+        amount: float,
+        price: float,
+        round_config: RoundConfig,
+        maker_precision: int,
+        taker_precision: int,
     ):
 
         raw_price = round_normal(price, round_config.price)
 
         if side == BUY:
 
-            raw_maker_amt = round_down(amount, round_config.size)
+            raw_maker_amt = round_down(amount, maker_precision)
             raw_taker_amt = raw_maker_amt / raw_price
-
-            if decimal_places(raw_taker_amt) > round_config.amount:
-                raw_taker_amt = round_up(raw_taker_amt, round_config.amount + 4)
-
-                if decimal_places(raw_taker_amt) > round_config.amount:
-                    raw_taker_amt = round_down(raw_taker_amt, round_config.amount)
-
-            maker_amount = to_token_decimals(raw_maker_amt)
-            taker_amount = to_token_decimals(raw_taker_amt)
-
-            return UtilsBuy, maker_amount, taker_amount
 
         elif side == SELL:
 
             raw_maker_amt = round_down(amount, round_config.size)
             raw_taker_amt = raw_maker_amt * raw_price
 
-            if decimal_places(raw_taker_amt) > round_config.amount:
-                raw_taker_amt = round_up(raw_taker_amt, round_config.amount + 4)
-
-                if decimal_places(raw_taker_amt) > round_config.amount:
-                    raw_taker_amt = round_down(raw_taker_amt, round_config.amount)
-
-            maker_amount = to_token_decimals(raw_maker_amt)
-            taker_amount = to_token_decimals(raw_taker_amt)
-
-            return UtilsSell, maker_amount, taker_amount
-
         else:
             raise ValueError(f"order_args.side must be '{BUY}' or '{SELL}'")
+
+        raw_maker_amt = _clamp_precision(raw_maker_amt, maker_precision)
+        raw_taker_amt = _clamp_precision(raw_taker_amt, taker_precision)
+
+        maker_amount = to_token_decimals(raw_maker_amt)
+        taker_amount = to_token_decimals(raw_taker_amt)
+
+        if side == BUY:
+            return UtilsBuy, maker_amount, taker_amount
+        else:
+            return UtilsSell, maker_amount, taker_amount
 
     # ==========================================================
     # CREATE LIMIT ORDER
@@ -167,26 +160,34 @@ class OrderBuilder:
     ) -> SignedOrder:
 
         round_config = ROUNDING_CONFIG[options.tick_size]
-
         order_type = getattr(options, "order_type", None)
+        is_taker = order_type in (OrderType.FAK, OrderType.FOK)
 
-        is_taker = order_type in (
-            OrderType.FAK,
-            OrderType.FOK,
-        )
+        # ======================================================
+        # PRECISION MATRIX
+        # ======================================================
 
-        if is_taker:
-            round_config = RoundConfig(
-                price=round_config.price,
-                size=round_config.size,
-                amount=TAKER_AMOUNT_PRECISION,
-            )
+        if order_args.side == BUY:
+            if is_taker:
+                maker_precision = 2
+                taker_precision = 4
+            else:
+                maker_precision = 4
+                taker_precision = 2
+
+        else:  # SELL
+            maker_precision = 2
+            taker_precision = 4
+
+        # ======================================================
 
         side, maker_amount, taker_amount = self.get_order_amounts(
             order_args.side,
             order_args.size,
             order_args.price,
             round_config,
+            maker_precision,
+            taker_precision,
         )
 
         data = OrderData(
@@ -215,17 +216,20 @@ class OrderBuilder:
 
         base = ROUNDING_CONFIG[options.tick_size]
 
-        round_config = RoundConfig(
-            price=base.price,
-            size=base.size,
-            amount=TAKER_AMOUNT_PRECISION,
-        )
+        if order_args.side == BUY:
+            maker_precision = 2
+            taker_precision = 4
+        else:
+            maker_precision = 2
+            taker_precision = 4
 
         side, maker_amount, taker_amount = self.get_market_order_amounts(
             order_args.side,
             order_args.amount,
             order_args.price,
-            round_config,
+            base,
+            maker_precision,
+            taker_precision,
         )
 
         data = OrderData(

@@ -7,10 +7,10 @@ from py_order_utils.model import (
 )
 
 from .constants import ZERO_ADDRESS
-from enum import Enum
 
 
-class OrderType(str,Enum):
+
+class OrderType(enumerate):
     GTC = "GTC"
     FOK = "FOK"
     GTD = "GTD"
@@ -185,7 +185,7 @@ class OrderBookSummary:
         return dumps(self.__dict__, separators=(",", ":"))
 
 
-class AssetType(str,Enum):
+class AssetType(enumerate):
     COLLATERAL = "COLLATERAL"
     CONDITIONAL = "CONDITIONAL"
 
